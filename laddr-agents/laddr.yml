@@ -1,0 +1,13 @@
+project:
+  name: requirements-to-testcases
+  description: Multi-agent pipeline for transforming requirements into test cases
+  queue_backend: memory
+  db_backend: sqlite
+  llm_backend: openai
+  cache_backend: inmemory
+  agents:
+    - requirements_ingest
+    - userstory_extract
+    - testcase_design
+    - risk_prioritize
+    - export_agent

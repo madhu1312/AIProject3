@@ -1,0 +1,38 @@
+name: requirements_to_testcases
+description: Pipeline to transform requirements into prioritized test cases
+
+# Pipeline stages - executed sequentially
+# Each stage receives output from previous stage as input
+stages:
+  - name: ingest_requirements
+    description: "Parse and structure the requirements document"
+    agent: requirements_ingest
+    expected_output: Structured requirements with IDs and sections
+
+  - name: extract_user_stories
+    description: "Generate user stories from parsed requirements"
+    agent: userstory_extract
+    expected_output: User stories with acceptance criteria and traceability
+    context:
+      - ingest_requirements
+
+  - name: design_test_cases
+    description: "Design comprehensive test cases from user stories"
+    agent: testcase_design
+    expected_output: Test cases covering all acceptance criteria
+    context:
+      - extract_user_stories
+
+  - name: prioritize_tests
+    description: "Assess risk and prioritize test execution order"
+    agent: risk_prioritize
+    expected_output: Prioritized test cases with execution plan
+    context:
+      - design_test_cases
+
+  - name: export_tests
+    description: "Export test cases to Zephyr, Jira, Playwright, and Tosca"
+    agent: export_agent
+    expected_output: Export files in multiple formats
+    context:
+      - prioritize_tests
