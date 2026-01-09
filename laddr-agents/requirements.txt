@@ -1,0 +1,28 @@
+# Laddr Agents Dependencies
+# JIRA: SCRUM-85
+
+# Core
+pyyaml>=6.0
+python-dotenv>=1.0.0
+requests>=2.31.0
+
+# AI/LLM Integration
+openai>=1.0.0
+anthropic>=0.18.0
+
+# Laddr Framework (if available)
+# laddr>=0.1.0
+
+# Utilities
+rich>=13.0.0      # Pretty console output
+click>=8.0.0       # CLI framework
+jinja2>=3.0.0      # Template engine
+aiohttp>=3.9.0     # Async HTTP client
+
+# Testing
+pytest>=7.0.0
+pytest-asyncio>=0.21.0
+
+# Code Analysis (optional)
+# bandit>=1.7.0     # Security scanning
+# pylint>=2.17.0    # Code quality
