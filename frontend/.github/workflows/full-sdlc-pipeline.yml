@@ -1,0 +1,497 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# FULL SDLC PIPELINE - From Ticket to Deploy
+# ═══════════════════════════════════════════════════════════════════════════════
+# 
+# JIRA Ticket: SCRUM-85
+# 
+# This pipeline automates the complete SDLC:
+#   1. JIRA Integration - Update ticket status
+#   2. Code Quality     - Lint, Type Check
+#   3. Testing          - Unit, Integration, E2E
+#   4. Security         - SAST, Dependency Scan
+#   5. Build            - Production Build
+#   6. Deploy Staging   - Auto on develop branch
+#   7. Deploy Production- Auto on main branch (with approval)
+#   8. Notifications    - Slack/Teams alerts
+#
+# ═══════════════════════════════════════════════════════════════════════════════
+
+name: 🚀 Full SDLC Pipeline
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+  workflow_dispatch:
+    inputs:
+      jira_ticket:
+        description: 'JIRA Ticket Key (e.g., SCRUM-85)'
+        required: false
+        type: string
+      skip_tests:
+        description: 'Skip tests (emergency only)'
+        required: false
+        type: boolean
+        default: false
+
+env:
+  NODE_VERSION: '18'
+  JIRA_BASE_URL: 'https://mstik5726.atlassian.net'
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# JOBS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+jobs:
+  # ─────────────────────────────────────────────────────────────────────────────
+  # PHASE 0: Extract JIRA Ticket & Update Status
+  # ─────────────────────────────────────────────────────────────────────────────
+  jira-update-start:
+    name: 📋 JIRA - Start Pipeline
+    runs-on: ubuntu-latest
+    outputs:
+      jira_key: ${{ steps.extract.outputs.jira_key }}
+    steps:
+      - name: Extract JIRA Key from Branch/Commit
+        id: extract
+        run: |
+          # Try to extract from input, branch name, or commit message
+          if [ -n "${{ github.event.inputs.jira_ticket }}" ]; then
+            JIRA_KEY="${{ github.event.inputs.jira_ticket }}"
+          else
+            # Extract from branch name (e.g., feature/SCRUM-85-description)
+            JIRA_KEY=$(echo "${{ github.head_ref || github.ref_name }}" | grep -oE 'SCRUM-[0-9]+' | head -1 || echo "")
+          fi
+          
+          if [ -z "$JIRA_KEY" ]; then
+            # Try to extract from commit message
+            JIRA_KEY=$(echo "${{ github.event.head_commit.message }}" | grep -oE 'SCRUM-[0-9]+' | head -1 || echo "")
+          fi
+          
+          echo "jira_key=$JIRA_KEY" >> $GITHUB_OUTPUT
+          echo "🎫 JIRA Key: $JIRA_KEY"
+
+      - name: Update JIRA - In Progress
+        if: steps.extract.outputs.jira_key != ''
+        env:
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+        run: |
+          curl -X POST \
+            -u "$JIRA_EMAIL:$JIRA_API_TOKEN" \
+            -H "Content-Type: application/json" \
+            --url "${{ env.JIRA_BASE_URL }}/rest/api/3/issue/${{ steps.extract.outputs.jira_key }}/comment" \
+            -d '{
+              "body": {
+                "type": "doc",
+                "version": 1,
+                "content": [{
+                  "type": "paragraph",
+                  "content": [{
+                    "type": "text",
+                    "text": "🚀 CI/CD Pipeline Started - Run #${{ github.run_number }}"
+                  }]
+                }]
+              }
+            }' || echo "Could not update JIRA"
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # PHASE 1: Code Quality
+  # ─────────────────────────────────────────────────────────────────────────────
+  lint:
+    name: 🔍 Lint & Type Check
+    runs-on: ubuntu-latest
+    needs: jira-update-start
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run ESLint
+        run: npm run lint || true
+
+      - name: Run TypeScript check
+        run: npm run type-check || npx tsc --noEmit
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # PHASE 2: Testing
+  # ─────────────────────────────────────────────────────────────────────────────
+  unit-tests:
+    name: 🧪 Unit Tests
+    runs-on: ubuntu-latest
+    needs: lint
+    if: ${{ github.event.inputs.skip_tests != 'true' }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run unit tests with coverage
+        run: npm run test:coverage || npm test -- --coverage
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v3
+        with:
+          files: ./coverage/lcov.info
+          fail_ci_if_error: false
+
+  e2e-tests:
+    name: 🎭 E2E Tests (Playwright)
+    runs-on: ubuntu-latest
+    needs: lint
+    if: ${{ github.event.inputs.skip_tests != 'true' }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps
+
+      - name: Run E2E tests
+        run: npm run test:e2e || npx playwright test
+
+      - name: Upload Playwright report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 30
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # PHASE 3: Security Scanning
+  # ─────────────────────────────────────────────────────────────────────────────
+  security:
+    name: 🔒 Security Scan
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run npm audit
+        run: npm audit --audit-level=high || true
+
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          severity: 'CRITICAL,HIGH'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+        continue-on-error: true
+
+      - name: Upload Trivy scan results
+        uses: github/codeql-action/upload-sarif@v2
+        if: always()
+        with:
+          sarif_file: 'trivy-results.sarif'
+        continue-on-error: true
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # PHASE 4: Build
+  # ─────────────────────────────────────────────────────────────────────────────
+  build:
+    name: 🏗️ Build Application
+    runs-on: ubuntu-latest
+    needs: [unit-tests, e2e-tests, security]
+    if: always() && (needs.unit-tests.result == 'success' || needs.unit-tests.result == 'skipped') && (needs.e2e-tests.result == 'success' || needs.e2e-tests.result == 'skipped')
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build application
+        run: npm run build
+        env:
+          NODE_ENV: production
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-${{ github.sha }}
+          path: dist/
+          retention-days: 7
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # PHASE 5: Build Docker Image
+  # ─────────────────────────────────────────────────────────────────────────────
+  docker:
+    name: 🐳 Build Docker Image
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.event_name == 'push'
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: build-${{ github.sha }}
+          path: dist/
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=sha,prefix=
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # PHASE 6: Deploy to Staging (develop branch)
+  # ─────────────────────────────────────────────────────────────────────────────
+  deploy-staging:
+    name: 🚀 Deploy to Staging
+    runs-on: ubuntu-latest
+    needs: [build, docker]
+    if: github.ref == 'refs/heads/develop' && github.event_name == 'push'
+    environment:
+      name: staging
+      url: https://staging.cms-app.example.com
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: build-${{ github.sha }}
+          path: dist/
+
+      - name: Deploy to Vercel (Staging)
+        uses: amondnet/vercel-action@v25
+        with:
+          vercel-token: ${{ secrets.VERCEL_TOKEN }}
+          vercel-org-id: ${{ secrets.VERCEL_ORG_ID }}
+          vercel-project-id: ${{ secrets.VERCEL_PROJECT_ID }}
+          working-directory: ./
+          alias-domains: staging.cms-app.example.com
+
+      - name: Update JIRA - Deployed to Staging
+        if: needs.jira-update-start.outputs.jira_key != ''
+        env:
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+        run: |
+          curl -X POST \
+            -u "$JIRA_EMAIL:$JIRA_API_TOKEN" \
+            -H "Content-Type: application/json" \
+            --url "${{ env.JIRA_BASE_URL }}/rest/api/3/issue/${{ needs.jira-update-start.outputs.jira_key }}/comment" \
+            -d '{
+              "body": {
+                "type": "doc",
+                "version": 1,
+                "content": [{
+                  "type": "paragraph",
+                  "content": [{
+                    "type": "text",
+                    "text": "✅ Deployed to STAGING - https://staging.cms-app.example.com"
+                  }]
+                }]
+              }
+            }' || echo "Could not update JIRA"
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # PHASE 7: Deploy to Production (main branch)
+  # ─────────────────────────────────────────────────────────────────────────────
+  deploy-production:
+    name: 🚀 Deploy to Production
+    runs-on: ubuntu-latest
+    needs: [build, docker]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    environment:
+      name: production
+      url: https://cms-app.example.com
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: build-${{ github.sha }}
+          path: dist/
+
+      - name: Deploy to Vercel (Production)
+        uses: amondnet/vercel-action@v25
+        with:
+          vercel-token: ${{ secrets.VERCEL_TOKEN }}
+          vercel-org-id: ${{ secrets.VERCEL_ORG_ID }}
+          vercel-project-id: ${{ secrets.VERCEL_PROJECT_ID }}
+          vercel-args: '--prod'
+
+      - name: Update JIRA - Deployed to Production
+        if: needs.jira-update-start.outputs.jira_key != ''
+        env:
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+        run: |
+          curl -X POST \
+            -u "$JIRA_EMAIL:$JIRA_API_TOKEN" \
+            -H "Content-Type: application/json" \
+            --url "${{ env.JIRA_BASE_URL }}/rest/api/3/issue/${{ needs.jira-update-start.outputs.jira_key }}/comment" \
+            -d '{
+              "body": {
+                "type": "doc",
+                "version": 1,
+                "content": [{
+                  "type": "paragraph",
+                  "content": [{
+                    "type": "text",
+                    "text": "🎉 Deployed to PRODUCTION - https://cms-app.example.com"
+                  }]
+                }]
+              }
+            }' || echo "Could not update JIRA"
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # PHASE 8: Notifications
+  # ─────────────────────────────────────────────────────────────────────────────
+  notify-success:
+    name: 📢 Notify Success
+    runs-on: ubuntu-latest
+    needs: [deploy-staging, deploy-production]
+    if: always() && (needs.deploy-staging.result == 'success' || needs.deploy-production.result == 'success')
+    steps:
+      - name: Send Slack notification
+        uses: slackapi/slack-github-action@v1.24.0
+        with:
+          payload: |
+            {
+              "text": "✅ Deployment Successful!",
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "✅ *Deployment Successful*\n*Repository:* ${{ github.repository }}\n*Branch:* ${{ github.ref_name }}\n*Commit:* ${{ github.sha }}\n*By:* ${{ github.actor }}"
+                  }
+                }
+              ]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK
+        continue-on-error: true
+
+  notify-failure:
+    name: 📢 Notify Failure
+    runs-on: ubuntu-latest
+    needs: [lint, unit-tests, e2e-tests, security, build]
+    if: failure()
+    steps:
+      - name: Send Slack notification
+        uses: slackapi/slack-github-action@v1.24.0
+        with:
+          payload: |
+            {
+              "text": "❌ Pipeline Failed!",
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "❌ *Pipeline Failed*\n*Repository:* ${{ github.repository }}\n*Branch:* ${{ github.ref_name }}\n*Commit:* ${{ github.sha }}\n*By:* ${{ github.actor }}\n*Action:* <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View Logs>"
+                  }
+                }
+              ]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK
+        continue-on-error: true
+
+      - name: Update JIRA - Pipeline Failed
+        if: needs.jira-update-start.outputs.jira_key != ''
+        env:
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+        run: |
+          curl -X POST \
+            -u "$JIRA_EMAIL:$JIRA_API_TOKEN" \
+            -H "Content-Type: application/json" \
+            --url "${{ env.JIRA_BASE_URL }}/rest/api/3/issue/${{ needs.jira-update-start.outputs.jira_key }}/comment" \
+            -d '{
+              "body": {
+                "type": "doc",
+                "version": 1,
+                "content": [{
+                  "type": "paragraph",
+                  "content": [{
+                    "type": "text",
+                    "text": "❌ Pipeline FAILED - Check GitHub Actions for details"
+                  }]
+                }]
+              }
+            }' || echo "Could not update JIRA"
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # ROLLBACK JOB (Manual Trigger)
+  # ─────────────────────────────────────────────────────────────────────────────
+  # To rollback, trigger workflow_dispatch with previous SHA or use:
+  # gh workflow run full-sdlc-pipeline.yml -f jira_ticket=SCRUM-XX

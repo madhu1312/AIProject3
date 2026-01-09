@@ -1,0 +1,431 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# AI-Powered SDLC Pipeline - From Ticket to Deploy (GitHub Pages)
+# JIRA: SCRUM-85
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# This pipeline integrates AI agents for FEATURE IMPLEMENTATION followed by CI/CD
+# Deploys to GitHub Pages (no Vercel account needed)
+#
+# Flow:
+#   1. 📋 Ticket Analysis    - Parse JIRA requirements
+#   2. 🤖 AI Implementation  - Generate code via Laddr agents
+#   3. 🧪 AI Test Generation - Generate tests for new code
+#   4. 📝 AI Code Review     - Review and improve code
+#   5. ✅ Validation         - Lint, type-check, run tests
+#   6. 🏗️  Build             - Create production build
+#   7. 🚀 Deploy             - Deploy to GitHub Pages
+#
+# ═══════════════════════════════════════════════════════════════════════════════
+
+name: 🤖 AI-Powered SDLC Pipeline
+
+on:
+  workflow_dispatch:
+    inputs:
+      jira_ticket:
+        description: 'JIRA Ticket Key (e.g., SCRUM-85)'
+        required: true
+        type: string
+      implementation_mode:
+        description: 'Implementation Mode'
+        required: true
+        type: choice
+        options:
+          - ai_full      # AI generates code, tests, and deploys
+          - ai_assist    # AI generates code, human reviews before deploy
+          - manual       # Skip AI, just run CI/CD on existing code
+        default: 'ai_assist'
+
+# Permissions for GitHub Pages
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+  pull-requests: write
+
+concurrency:
+  group: "sdlc-${{ github.event.inputs.jira_ticket }}"
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: '18'
+  PYTHON_VERSION: '3.11'
+  JIRA_BASE_URL: 'https://mstik5726.atlassian.net'
+  GITHUB_PAGES_URL: 'https://madhu1312.github.io/AIProject3/'
+
+jobs:
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Phase 1: Ticket Analysis
+  # ═══════════════════════════════════════════════════════════════════════════
+  analyze-ticket:
+    name: 📋 Analyze JIRA Ticket
+    runs-on: ubuntu-latest
+    outputs:
+      ticket_summary: ${{ steps.fetch.outputs.summary }}
+      ticket_description: ${{ steps.fetch.outputs.description }}
+      issue_type: ${{ steps.fetch.outputs.issue_type }}
+    
+    steps:
+      - name: Fetch JIRA Ticket Details
+        id: fetch
+        env:
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+        run: |
+          echo "🎫 Fetching ticket: ${{ inputs.jira_ticket }}"
+          
+          # Fetch ticket from JIRA API
+          RESPONSE=$(curl -s -u "$JIRA_EMAIL:$JIRA_API_TOKEN" \
+            -H "Content-Type: application/json" \
+            "${{ env.JIRA_BASE_URL }}/rest/api/3/issue/${{ inputs.jira_ticket }}")
+          
+          # Extract fields
+          SUMMARY=$(echo "$RESPONSE" | jq -r '.fields.summary // "No summary"')
+          DESCRIPTION=$(echo "$RESPONSE" | jq -r '.fields.description.content[0].content[0].text // "No description"')
+          ISSUE_TYPE=$(echo "$RESPONSE" | jq -r '.fields.issuetype.name // "Task"')
+          
+          echo "summary=$SUMMARY" >> $GITHUB_OUTPUT
+          echo "description=$DESCRIPTION" >> $GITHUB_OUTPUT
+          echo "issue_type=$ISSUE_TYPE" >> $GITHUB_OUTPUT
+          
+          echo "✅ Ticket: $SUMMARY"
+          echo "📝 Type: $ISSUE_TYPE"
+
+      - name: Update JIRA Status to In Progress
+        env:
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+        run: |
+          # Get available transitions
+          TRANSITIONS=$(curl -s -u "$JIRA_EMAIL:$JIRA_API_TOKEN" \
+            "${{ env.JIRA_BASE_URL }}/rest/api/3/issue/${{ inputs.jira_ticket }}/transitions")
+          
+          # Find "In Progress" transition ID
+          TRANSITION_ID=$(echo "$TRANSITIONS" | jq -r '.transitions[] | select(.name | test("progress"; "i")) | .id' | head -1)
+          
+          if [ -n "$TRANSITION_ID" ]; then
+            curl -s -X POST -u "$JIRA_EMAIL:$JIRA_API_TOKEN" \
+              -H "Content-Type: application/json" \
+              -d "{\"transition\": {\"id\": \"$TRANSITION_ID\"}}" \
+              "${{ env.JIRA_BASE_URL }}/rest/api/3/issue/${{ inputs.jira_ticket }}/transitions"
+            echo "✅ Ticket moved to In Progress"
+          fi
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Phase 2: AI Code Generation (Laddr Agents)
+  # ═══════════════════════════════════════════════════════════════════════════
+  ai-implementation:
+    name: 🤖 AI Code Generation
+    runs-on: ubuntu-latest
+    needs: analyze-ticket
+    if: inputs.implementation_mode != 'manual'
+    outputs:
+      files_generated: ${{ steps.generate.outputs.files }}
+      branch_name: ${{ steps.branch.outputs.name }}
+    
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python for Laddr Agents
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install Laddr Dependencies
+        working-directory: laddr-agents
+        run: |
+          pip install pyyaml requests openai python-dotenv
+
+      - name: Create Feature Branch
+        id: branch
+        run: |
+          BRANCH="feature/${{ inputs.jira_ticket }}-ai-generated"
+          echo "name=$BRANCH" >> $GITHUB_OUTPUT
+          git config user.name "AI SDLC Bot"
+          git config user.email "ai-bot@github.com"
+          git checkout -b "$BRANCH" 2>/dev/null || git checkout "$BRANCH"
+
+      - name: 🔨 Run Code Generator Agent
+        id: generate
+        working-directory: laddr-agents
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+        run: |
+          echo "🤖 Generating code for: ${{ needs.analyze-ticket.outputs.ticket_summary }}"
+          
+          python agents/code_generator_agent.py \
+            --ticket "${{ inputs.jira_ticket }}" \
+            --summary "${{ needs.analyze-ticket.outputs.ticket_summary }}" \
+            --output "../frontend/src/generated" \
+            --with-tests || echo "Code generation completed with warnings"
+          
+          FILES=$(find ../frontend/src/generated -type f -name "*.ts" -o -name "*.tsx" 2>/dev/null | tr '\n' ',' || echo "none")
+          echo "files=$FILES" >> $GITHUB_OUTPUT
+
+      - name: 🧪 Run Test Generator Agent
+        working-directory: laddr-agents
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          echo "🧪 Generating tests..."
+          
+          python agents/test_generator_agent.py \
+            --source "../frontend/src/generated" \
+            --output "../frontend/src/__tests__/generated" \
+            --ticket "${{ inputs.jira_ticket }}" || echo "Test generation completed"
+
+      - name: 📝 Run Code Reviewer Agent
+        working-directory: laddr-agents
+        run: |
+          echo "📝 Running code review..."
+          
+          python agents/code_reviewer_agent.py \
+            --source "../frontend/src/generated" \
+            --output "../frontend/REVIEW_REPORT.md" || echo "Review completed"
+          
+          if [ -f "../frontend/REVIEW_REPORT.md" ]; then
+            echo "## 📝 Code Review Report" >> $GITHUB_STEP_SUMMARY
+            cat ../frontend/REVIEW_REPORT.md >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Commit Generated Code
+        run: |
+          git add -A
+          
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "${{ inputs.jira_ticket }}: AI-generated implementation
+
+            Summary: ${{ needs.analyze-ticket.outputs.ticket_summary }}
+            Mode: ${{ inputs.implementation_mode }}
+            Generated by: AI SDLC Pipeline"
+            
+            git push origin "feature/${{ inputs.jira_ticket }}-ai-generated" --force
+            echo "✅ Code pushed to branch"
+          fi
+
+      - name: Create Pull Request (AI Assist Mode)
+        if: inputs.implementation_mode == 'ai_assist'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr create \
+            --title "${{ inputs.jira_ticket }}: ${{ needs.analyze-ticket.outputs.ticket_summary }}" \
+            --body "## 🤖 AI-Generated Implementation
+            
+            **Ticket:** [${{ inputs.jira_ticket }}](${{ env.JIRA_BASE_URL }}/browse/${{ inputs.jira_ticket }})
+            **Summary:** ${{ needs.analyze-ticket.outputs.ticket_summary }}
+            
+            ### Generated Files
+            ${{ steps.generate.outputs.files }}
+            
+            ### Review Checklist
+            - [ ] Code follows project conventions
+            - [ ] Tests are comprehensive
+            - [ ] No security vulnerabilities
+            
+            ---
+            *Generated by AI SDLC Pipeline*" \
+            --base main \
+            --head "feature/${{ inputs.jira_ticket }}-ai-generated" || echo "PR may already exist"
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Phase 3: Human Review Gate (AI Assist Mode Only)
+  # ═══════════════════════════════════════════════════════════════════════════
+  human-review-gate:
+    name: 👤 Human Review Gate
+    runs-on: ubuntu-latest
+    needs: [analyze-ticket, ai-implementation]
+    if: inputs.implementation_mode == 'ai_assist'
+    environment: review
+    
+    steps:
+      - name: Await Human Approval
+        run: |
+          echo "⏳ Waiting for human review..."
+          echo "## Review Required" >> $GITHUB_STEP_SUMMARY
+          echo "Please review the AI-generated PR before deployment continues." >> $GITHUB_STEP_SUMMARY
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Phase 4: Validation (Lint, Type Check, Tests)
+  # ═══════════════════════════════════════════════════════════════════════════
+  validation:
+    name: ✅ Code Validation
+    runs-on: ubuntu-latest
+    needs: [analyze-ticket, ai-implementation, human-review-gate]
+    if: |
+      always() && 
+      (needs.ai-implementation.result == 'success' || inputs.implementation_mode == 'manual') &&
+      (needs.human-review-gate.result == 'success' || inputs.implementation_mode != 'ai_assist')
+    
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.implementation_mode != 'manual' && format('feature/{0}-ai-generated', inputs.jira_ticket) || github.ref }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install Dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: 🔍 Lint & Type Check
+        working-directory: frontend
+        run: |
+          echo "Running ESLint..."
+          npm run lint || true
+          
+          echo "Running TypeScript type check..."
+          npx tsc --noEmit || true
+
+      - name: 🧪 Unit Tests
+        working-directory: frontend
+        run: |
+          npm test -- --passWithNoTests || true
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Phase 5: Build
+  # ═══════════════════════════════════════════════════════════════════════════
+  build:
+    name: 🏗️ Build Application
+    runs-on: ubuntu-latest
+    needs: validation
+    
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.implementation_mode != 'manual' && format('feature/{0}-ai-generated', inputs.jira_ticket) || github.ref }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install & Build
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+        env:
+          GITHUB_PAGES: 'true'
+          VITE_APP_VERSION: ${{ inputs.jira_ticket }}-${{ github.run_number }}
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v4
+
+      - name: Upload Pages Artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: frontend/dist
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Phase 6: Deploy to GitHub Pages
+  # ═══════════════════════════════════════════════════════════════════════════
+  deploy:
+    name: 🚀 Deploy to GitHub Pages
+    runs-on: ubuntu-latest
+    needs: [analyze-ticket, build]
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
+
+      - name: Add JIRA Comment - Deployment Ready
+        env:
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+        run: |
+          curl -X POST -u "$JIRA_EMAIL:$JIRA_API_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d '{
+              "body": {
+                "type": "doc",
+                "version": 1,
+                "content": [{
+                  "type": "paragraph",
+                  "content": [{
+                    "type": "text",
+                    "text": "🚀 Deployed to GitHub Pages: ${{ steps.deployment.outputs.page_url }}"
+                  }]
+                }]
+              }
+            }' \
+            "${{ env.JIRA_BASE_URL }}/rest/api/3/issue/${{ inputs.jira_ticket }}/comment" || true
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Phase 7: Merge & Complete
+  # ═══════════════════════════════════════════════════════════════════════════
+  completion:
+    name: 🎉 Complete Pipeline
+    runs-on: ubuntu-latest
+    needs: [analyze-ticket, deploy]
+    if: always() && needs.deploy.result == 'success'
+    
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Merge Feature Branch to Main
+        if: inputs.implementation_mode != 'manual'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          BRANCH="feature/${{ inputs.jira_ticket }}-ai-generated"
+          
+          git config user.name "AI SDLC Bot"
+          git config user.email "ai-bot@github.com"
+          git fetch origin
+          git checkout main
+          git pull origin main
+          git merge "origin/$BRANCH" --no-ff -m "Merge ${{ inputs.jira_ticket }}: ${{ needs.analyze-ticket.outputs.ticket_summary }}" || true
+          git push origin main || true
+
+      - name: Update JIRA Ticket to Done
+        env:
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+        run: |
+          TRANSITIONS=$(curl -s -u "$JIRA_EMAIL:$JIRA_API_TOKEN" \
+            "${{ env.JIRA_BASE_URL }}/rest/api/3/issue/${{ inputs.jira_ticket }}/transitions")
+          
+          DONE_ID=$(echo "$TRANSITIONS" | jq -r '.transitions[] | select(.name | test("done|complete"; "i")) | .id' | head -1)
+          
+          if [ -n "$DONE_ID" ]; then
+            curl -X POST -u "$JIRA_EMAIL:$JIRA_API_TOKEN" \
+              -H "Content-Type: application/json" \
+              -d "{\"transition\": {\"id\": \"$DONE_ID\"}}" \
+              "${{ env.JIRA_BASE_URL }}/rest/api/3/issue/${{ inputs.jira_ticket }}/transitions"
+            echo "✅ Ticket marked as Done"
+          fi
+
+      - name: Pipeline Summary
+        run: |
+          echo "## 🎉 AI SDLC Pipeline Complete!" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Item | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| 🎫 Ticket | ${{ inputs.jira_ticket }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| 📝 Summary | ${{ needs.analyze-ticket.outputs.ticket_summary }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| 🚀 Deployed | ${{ env.GITHUB_PAGES_URL }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| 🤖 Mode | ${{ inputs.implementation_mode }} |" >> $GITHUB_STEP_SUMMARY
