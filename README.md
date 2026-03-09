@@ -202,6 +202,7 @@ This project follows JIRA-driven development:
 
 | Ticket | Description | Status |
 |--------|-------------|--------|
+| SCRUM-2 | Add .nvmrc to pin Node.js version | ✅ |
 | SCRUM-71 | Epic: CMS React App Development | ✅ |
 | SCRUM-72 | Export Agent Implementation | ✅ |
 | SCRUM-73 | Risk Prioritization Agent | ✅ |
