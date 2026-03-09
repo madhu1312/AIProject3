@@ -20,10 +20,6 @@ export const ArticleEdit = () => {
   });
   const [tagInput, setTagInput] = useState('');
 
-  useEffect(() => {
-    loadArticle();
-  }, [id]);
-
   const loadArticle = async () => {
     if (!id) return;
     setLoading(true);
@@ -40,6 +36,11 @@ export const ArticleEdit = () => {
     }
     setLoading(false);
   };
+
+  useEffect(() => {
+    loadArticle();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id]);
 
   const handleSave = async () => {
     if (!id || !formData.title.trim()) {

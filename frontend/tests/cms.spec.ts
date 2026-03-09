@@ -287,17 +287,21 @@ test.describe('Article Status Management', () => {
   test('should display publish button for draft articles', async ({ page }) => {
     await page.goto('/');
     
-    // Look for a draft article with publish button
-    const publishButton = page.getByRole('button', { name: 'Publish' }).first();
-    // This is conditional based on whether drafts exist
+    // Publish buttons only appear when draft articles exist in the backend
+    const count = await page.getByRole('button', { name: 'Publish' }).count();
+    if (count > 0) {
+      await expect(page.getByRole('button', { name: 'Publish' }).first()).toBeVisible();
+    }
   });
 
   test('should display unpublish button for published articles', async ({ page }) => {
     await page.goto('/');
     
-    // Look for unpublish button
-    const unpublishButton = page.getByRole('button', { name: 'Unpublish' }).first();
-    // This is conditional based on whether published articles exist
+    // Unpublish buttons only appear when published articles exist in the backend
+    const count = await page.getByRole('button', { name: 'Unpublish' }).count();
+    if (count > 0) {
+      await expect(page.getByRole('button', { name: 'Unpublish' }).first()).toBeVisible();
+    }
   });
 });
 

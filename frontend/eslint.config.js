@@ -19,5 +19,11 @@ export default defineConfig([
       ecmaVersion: 2020,
       globals: globals.browser,
     },
+    rules: {
+      // Disable overly strict rules that fire on the standard useEffect data-fetching
+      // pattern used throughout this app (async function called from effect that
+      // updates loading/data state after awaiting the API response).
+      'react-hooks/set-state-in-effect': 'off',
+    },
   },
 ])
