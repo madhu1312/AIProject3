@@ -10,10 +10,6 @@ export const ArticleView = () => {
   const [article, setArticle] = useState<Article | null>(null);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    loadArticle();
-  }, [id]);
-
   const loadArticle = async () => {
     if (!id) return;
     setLoading(true);
@@ -21,6 +17,11 @@ export const ArticleView = () => {
     setArticle(data);
     setLoading(false);
   };
+
+  useEffect(() => {
+    loadArticle();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id]);
 
   const formatDate = (dateString: string | undefined) => {
     if (!dateString) return 'N/A';

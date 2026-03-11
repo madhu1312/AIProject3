@@ -1,0 +1,9 @@
+# Core AI agent framework
+# Install from GitHub: pip install git+https://github.com/AgentLabs/Laddr.git
+# laddr is not yet available on PyPI; run the command above to install it
+
+# LLM provider
+openai>=1.0.0
+
+# Environment variable loading
+python-dotenv>=1.0.0

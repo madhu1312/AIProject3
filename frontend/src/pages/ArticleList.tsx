@@ -11,16 +11,16 @@ export const ArticleList = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
 
-  useEffect(() => {
-    loadArticles();
-  }, []);
-
   const loadArticles = async () => {
     setLoading(true);
     const data = await articleService.getAll();
     setArticles(data);
     setLoading(false);
   };
+
+  useEffect(() => {
+    loadArticles();
+  }, []);
 
   const handleDelete = async (id: string) => {
     if (window.confirm('Are you sure you want to delete this article?')) {

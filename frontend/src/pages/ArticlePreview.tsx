@@ -10,10 +10,6 @@ export const ArticlePreview = () => {
   const [article, setArticle] = useState<Article | null>(null);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    loadArticle();
-  }, [slug]);
-
   const loadArticle = async () => {
     if (!slug) return;
     setLoading(true);
@@ -21,6 +17,11 @@ export const ArticlePreview = () => {
     setArticle(data);
     setLoading(false);
   };
+
+  useEffect(() => {
+    loadArticle();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [slug]);
 
   const formatDate = (dateString: string | undefined) => {
     if (!dateString) return 'N/A';
