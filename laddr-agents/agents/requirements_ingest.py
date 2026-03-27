@@ -1,169 +1,88 @@
 """
 Requirements Ingestion Agent - Agent 1 of 5
 
-This agent ingests requirements documents (markdown, text, etc.) and 
-parses them into a structured format for downstream agents.
-
-JIRA Ticket: SCRUM-73
+This agent ingests requirements documents and parses them into structured format.
+JIRA Ticket: SCRUM-76
 """
 from __future__ import annotations
 
-import asyncio
-import os
 import json
 import re
 from typing import Any, Dict, List
-from dotenv import load_dotenv
-from laddr import Agent, WorkerRunner
-from laddr.llms import openai
-from laddr.core.tools import tool
 
-load_dotenv()
+from laddr import tool
 
-# Custom tools for requirements ingestion
 
-@tool(
-    name="parse_requirements",
-    description="Parse raw requirements text into structured sections",
-    parameters={
-        "type": "object",
-        "properties": {
-            "content": {"type": "string", "description": "Raw requirements document content"},
-            "format": {"type": "string", "enum": ["markdown", "text", "bullet_list"], "default": "markdown"}
-        },
-        "required": ["content"]
+@tool(name="parse_requirements", description="Parse raw requirements text into structured sections")
+def parse_requirements(raw_text: str) -> Dict[str, Any]:
+    """Parse requirements document into structured format."""
+    sections = {
+        "functional": [],
+        "non_functional": [],
+        "user_stories": [],
+        "constraints": [],
+        "raw_items": []
     }
-)
-def parse_requirements(content: str, format: str = "markdown") -> Dict[str, Any]:
-    """Parse requirements document into structured sections."""
-    sections = []
-    current_section = None
     
-    lines = content.strip().split('\n')
+    current_section = "raw_items"
+    lines = raw_text.strip().split("\n")
     
     for line in lines:
         line = line.strip()
         if not line:
             continue
             
-        # Detect headers (markdown style)
-        if line.startswith('#'):
-            level = len(re.match(r'^#+', line).group())
-            title = line.lstrip('#').strip()
-            current_section = {
-                "level": level,
-                "title": title,
-                "content": [],
-                "requirements": []
-            }
-            sections.append(current_section)
-        elif current_section:
-            # Detect requirement patterns (REQ-XXX, FR-XXX, NFR-XXX)
-            req_match = re.match(r'^(REQ|FR|NFR|UC|US)-(\d+):?\s*(.*)', line, re.IGNORECASE)
-            if req_match:
-                current_section["requirements"].append({
-                    "id": f"{req_match.group(1).upper()}-{req_match.group(2)}",
-                    "text": req_match.group(3) or "",
-                    "type": req_match.group(1).upper()
-                })
-            else:
-                current_section["content"].append(line)
+        # Detect section headers
+        lower = line.lower()
+        if "functional requirement" in lower:
+            current_section = "functional"
+            continue
+        elif "non-functional" in lower or "non functional" in lower:
+            current_section = "non_functional"
+            continue
+        elif "user stor" in lower:
+            current_section = "user_stories"
+            continue
+        elif "constraint" in lower:
+            current_section = "constraints"
+            continue
+        
+        # Parse requirement IDs
+        req_match = re.match(r"^([A-Z]{2,}-\d+)[:\s]+(.+)$", line)
+        if req_match:
+            sections[current_section].append({
+                "id": req_match.group(1),
+                "text": req_match.group(2).strip(),
+                "type": current_section
+            })
+        elif line.startswith("-") or line.startswith("*"):
+            sections[current_section].append({
+                "id": f"AUTO-{len(sections[current_section]) + 1}",
+                "text": line[1:].strip(),
+                "type": current_section
+            })
+    
+    return sections
+
+
+@tool(name="validate_requirements", description="Validate parsed requirements for completeness")
+def validate_requirements(parsed_reqs: Dict[str, Any]) -> Dict[str, Any]:
+    """Validate requirements for completeness and quality."""
+    issues = []
+    
+    total = sum(len(v) for v in parsed_reqs.values() if isinstance(v, list))
+    
+    if total == 0:
+        issues.append("No requirements found")
+    if not parsed_reqs.get("functional"):
+        issues.append("No functional requirements defined")
     
     return {
-        "sections": sections,
-        "total_sections": len(sections),
-        "total_requirements": sum(len(s["requirements"]) for s in sections)
+        "valid": len(issues) == 0,
+        "issues": issues,
+        "total_requirements": total
     }
 
 
-@tool(
-    name="extract_requirement_ids",
-    description="Extract all requirement IDs from text",
-    parameters={
-        "type": "object",
-        "properties": {
-            "content": {"type": "string", "description": "Text content to scan for requirement IDs"}
-        },
-        "required": ["content"]
-    }
-)
-def extract_requirement_ids(content: str) -> Dict[str, List[str]]:
-    """Extract requirement IDs from text."""
-    patterns = {
-        "functional": re.findall(r'FR-\d+', content, re.IGNORECASE),
-        "non_functional": re.findall(r'NFR-\d+', content, re.IGNORECASE),
-        "use_case": re.findall(r'UC-\d+', content, re.IGNORECASE),
-        "user_story": re.findall(r'US-\d+', content, re.IGNORECASE),
-        "general": re.findall(r'REQ-\d+', content, re.IGNORECASE)
-    }
-    
-    # Remove duplicates
-    for key in patterns:
-        patterns[key] = list(set(patterns[key]))
-    
-    return {
-        "requirement_ids": patterns,
-        "total_count": sum(len(v) for v in patterns.values())
-    }
-
-
-TOOLS = [parse_requirements, extract_requirement_ids]
-
-requirements_ingest = Agent(
-    name="requirements_ingest",
-    role="Requirements Ingestion Specialist",
-    goal="Ingest and parse requirements documents into structured format for analysis",
-    backstory="""You are a requirements analyst who specializes in reading and 
-    structuring requirements documents. You can parse various formats including 
-    markdown, plain text, and bullet lists. Your job is to identify requirements,
-    extract their IDs, and organize them into a clean structure for downstream
-    processing by other agents.""",
-    
-    llm=openai(model=os.getenv("LLM_MODEL_REQUIREMENTS_INGEST", "gpt-4o-mini"), temperature=0.0),
-    tools=TOOLS,
-    
-    max_retries=2,
-    max_iterations=5,
-    max_tool_calls=10,
-    timeout=120,
-    
-    trace_enabled=True,
-    trace_mask=[],
-    
-    instructions="""
-    ## Your Role
-    You are the first agent in a Requirements → Test Cases pipeline.
-    
-    ## Your Task
-    1. Receive raw requirements documents (markdown, text, etc.)
-    2. Use the parse_requirements tool to structure the content
-    3. Use extract_requirement_ids to identify all requirement IDs
-    4. Return a structured JSON with all parsed requirements
-    
-    ## Output Format
-    Return a JSON object with:
-    {
-        "status": "success",
-        "parsed_requirements": [...],
-        "requirement_ids": {...},
-        "summary": "Brief description of what was parsed"
-    }
-    
-    ## Important
-    - Preserve all original requirement text
-    - Identify requirement types (functional, non-functional, use case, etc.)
-    - Group related requirements together
-    - Flag any ambiguous or incomplete requirements
-    """
-)
-
-
-async def main():
-    """Run this agent as a worker."""
-    runner = WorkerRunner(agent=requirements_ingest)
-    print("Starting requirements_ingest worker...")
-    await runner.start()
-
-
-if __name__ == "__main__":
-    asyncio.run(main())
+# Export tools for pipeline
+__all__ = ["parse_requirements", "validate_requirements"]
